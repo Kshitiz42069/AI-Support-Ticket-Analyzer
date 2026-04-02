@@ -10,3 +10,4 @@ client=MongoClient(MONGO_URI)
 db = client[DB_NAME]
 
 tickets_collection = db["tickets"]
+users_collections = db["users"]

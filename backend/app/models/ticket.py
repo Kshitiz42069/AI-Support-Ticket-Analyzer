@@ -9,5 +9,5 @@ class Ticket(BaseModel):
     status:str="open"
     tag:Optional[str]= None
     embedding:Optional[List[float]] = None
+    assigned_agent_id:Optional[str] = None
     suggested_reply:Optional[str] = None
-    createdAt:Optional[datetime] = None
