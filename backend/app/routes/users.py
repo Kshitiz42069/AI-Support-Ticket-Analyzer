@@ -3,6 +3,7 @@ from app.models.user import UserCreated, UserResponse, UserLogin
 from app.database import users_collections
 from app.services.auth_service import hashPassword, verifyPassword
 from bson import ObjectId
+from bson.errors import InvalidId
 from app.utils.auth import create_access_token
 from app.dependencies.auth import get_current_user
 from datetime import datetime
@@ -14,7 +15,7 @@ router = APIRouter()
 def register(user:UserCreated):
     existingUser = users_collections.find_one({"email":user.email})
     if existingUser:
-        raise HTTPException(status_code=400, detail={"User already registered"})
+        raise HTTPException(status_code=400, detail="User already registered")
     hashedPw = hashPassword(user.password)
     user_data = {
         "name":user.name,
@@ -35,15 +36,21 @@ def allUserProfile(current_user=Depends(get_current_user)):
     users = list(users_collections.find())
     for user in users:
         user["_id"] = str(user["_id"])
-        user.pop("hasshedPassword", None)
+        user.pop("hashedPassword", None)
     return users
 
 #to get one user
 @router.get("/profile/{user_id}", response_model=UserResponse)
-def getUserProfile(user_id:str):
-    user = users_collections.find_one({"_id":ObjectId(user_id)})
+def getUserProfile(user_id:str, current_user=Depends(get_current_user)):
+    try:
+        obj_id = ObjectId(user_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Bad Request")
+    user = users_collections.find_one({"_id":obj_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    if current_user["role"] != "admin" and str(user["_id"]) != current_user["user_id"]:
+        raise HTTPException(status_code=403, detail="Unauthorised")
     user["_id"] = str(user["_id"])
     return user
 

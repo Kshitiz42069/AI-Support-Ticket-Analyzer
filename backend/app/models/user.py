@@ -20,7 +20,7 @@ class UserDB(BaseModel):
     name:str
     email:EmailStr
     hashedPassword:str
-    role:str="Customer"
+    role:str="customer"
     created_at:Optional[datetime]=None
 
 # for the response in FE

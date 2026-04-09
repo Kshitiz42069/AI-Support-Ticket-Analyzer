@@ -45,17 +45,14 @@ def get_one_ticket(ticket_id:str, current_user=Depends(get_current_user)):
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     
-    if current_user["role"] == "customer" and ticket["user_id"] != current_user["user_id"]:
-        raise HTTPException(status_code=403, detail="unauthorized")
-    
-    elif current_user["role"] == "agent" and ticket.get("assigned_agent_id") != current_user["user_id"]:
-        raise HTTPException(status_code=403, detail="unauthorized")
-    elif current_user["role"] == "admin":
-        pass
-    else:
+    isOwner = ticket["user_id"] != current_user["user_id"]
+    isAgent = current_user["role"] == "agent" and ticket.get("assigned_agent_id") != current_user["user_id"]
+    isAdmin = current_user["role"] == "admin"
+    if not (isOwner or isAgent or isAdmin):
         raise HTTPException(status_code=403, detail="Invalid Role")
     
     ticket["_id"] = str(ticket["_id"])
+    return ticket
     
 
 # delete ticket
@@ -68,7 +65,7 @@ def delete_ticket(ticket_id:str, current_user=Depends(get_current_user)):
     ticket = tickets_collection.find_one({"_id": obj_id})
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    if ticket["user_id"] != current_user["user_id"]:
+    if ticket["user_id"] != current_user["user_id"] and current_user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Unauthorized")
     tickets_collection.delete_one({"_id": ObjectId(ticket_id)})
     return {"message":"ticket Deleted Successfully!"}
@@ -83,7 +80,10 @@ def update_ticket(ticket_id:str, ticket:Ticket, current_user=Depends(get_current
     existing_ticket = tickets_collection.find_one({"_id": obj_id})
     if not existing_ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    if existing_ticket["user_id"] != current_user["user_id"]:
+    isUser = existing_ticket["user_id"] == current_user["user_id"]
+    isAgent = current_user["role"] == "agent" and existing_ticket.get("assigned_agent_id") == current_user["user_id"]
+    isAdmin = current_user["role"] == "admin"
+    if not (isUser or isAdmin or isAgent):
         raise HTTPException(status_code=403, detail="Unauthorized")
     ticket_dict = ticket.dict()
 
