@@ -26,5 +26,5 @@ class UserDB(BaseModel):
 # for the response in FE
 class UserResponse(BaseModel):
     name:str
-    email:str
+    email:EmailStr
     role:str
