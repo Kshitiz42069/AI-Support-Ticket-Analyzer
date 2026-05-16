@@ -1,13 +1,13 @@
 # AI Support Ticket Analyzer
 
-A FastAPI backend for a support help-desk where every incoming ticket is automatically classified by Google Gemini 2.0 Flash. The AI returns a priority level, topic tags, and a draft reply so agents never start from a blank page and admins can triage the queue without manually reading every ticket.
+A FastAPI backend for a support help-desk where every incoming ticket is automatically classified by Google Gemini. The AI returns a priority level, topic tags, and a draft reply so agents never start from a blank page and admins can triage the queue without manually reading every ticket.
 
 ## Stack
 
 - **Backend:** FastAPI, Pydantic v2, Uvicorn
-- **Database:** MongoDB (PyMongo)
+- **Database:** MongoDB (PyMongo), with aggregation pipelines for admin analytics
 - **Auth:** JWT (python-jose) + bcrypt password hashing
-- **AI:** Google Gemini 2.0 Flash via `google-genai` SDK, structured JSON output mode
+- **AI:** Google Gemini 2.5 Flash Lite via `google-genai` SDK, structured JSON output mode
 - **Frontend:** React + Vite (scaffold only — backend-first project)
 
 ## Architecture
@@ -18,10 +18,10 @@ A FastAPI backend for a support help-desk where every incoming ticket is automat
         └──────┬───────┘
                │ HTTPS + JWT Bearer
                ▼
-        ┌──────────────┐         ┌───────────────────┐
-        │   FastAPI    │────────▶│  Gemini 2.0 Flash │  ai_service.analyze_ticket()
-        │   routes     │◀────────│  (JSON mode)      │
-        └──────┬───────┘         └───────────────────┘
+        ┌──────────────┐         ┌────────────────────┐
+        │   FastAPI    │────────▶│  Gemini Flash Lite │  ai_service.analyze_ticket()
+        │   routes     │◀────────│  (JSON mode)       │
+        └──────┬───────┘         └────────────────────┘
                │
                ▼
         ┌──────────────┐
@@ -29,17 +29,17 @@ A FastAPI backend for a support help-desk where every incoming ticket is automat
         └──────────────┘
 ```
 
-On ticket creation, the route hands the `title` and `description` to `analyze_ticket()`, which calls Gemini with `response_mime_type: application/json`, parses the structured reply, and persists `priority`, `tags`, and `suggested_reply` alongside the ticket. AI failures fall back to safe defaults so ticket creation never blocks on the model.
+On ticket creation, the route hands the `title` and `description` to `analyze_ticket()`, which calls Gemini with `response_mime_type: application/json`, parses the structured reply, and persists `priority`, `tags`, and `suggested_reply` alongside the ticket. The AI call is wrapped in a try/except that returns safe defaults on any failure (network, quota, malformed response) — ticket creation is never blocked on the model, and a dedicated `/reanalyze` endpoint lets an agent retry classification once the issue is resolved.
 
 ## Roles & authorization
 
 Three roles are enforced on every protected route via a `get_current_user` dependency:
 
-| Role       | Can do                                                                 |
-|------------|------------------------------------------------------------------------|
-| `customer` | Create tickets, view and update their own                              |
-| `agent`    | View and update tickets assigned to them                               |
-| `admin`    | View all tickets, list users, assign tickets to agents                 |
+| Role       | Can do                                                                    |
+|------------|---------------------------------------------------------------------------|
+| `customer` | Create tickets, view and update their own                                 |
+| `agent`    | View and update tickets assigned to them                                  |
+| `admin`    | View all tickets, list users/agents, assign tickets, view ticket analytics |
 
 ## API surface
 
@@ -49,13 +49,22 @@ Three roles are enforced on every protected route via a `get_current_user` depen
 - `GET /me` — return the current authenticated user
 - `GET /profile/{user_id}` — fetch a single user (self or admin)
 - `GET /` — list all users (admin only)
+- `GET /agents` — list all agents (admin only), used to populate the assignment workflow
 
 ### Tickets — `/tickets`
 - `POST /` — create a ticket (AI auto-fills priority, tags, suggested reply)
-- `GET /` — list tickets (scoped by role)
+- `GET /` — list tickets, paginated and filterable:
+  - Query params: `status`, `priority`, `tag`, `skip` (default 0), `limit` (default 20)
+  - Results scoped by role (customer sees own, agent sees assigned, admin sees all)
+  - Sorted newest-first by `createdAt`
+  - Returns `{ total, skip, limit, items }`
+- `GET /stats` — admin-only aggregation over all tickets:
+  - `total`, `by_status`, `by_priority`, `top_tags` (top 10 by frequency)
+  - Implemented with Mongo aggregation pipelines (`$group`, `$unwind`, `$sort`, `$limit`)
 - `GET /{ticket_id}` — fetch one ticket (owner, assigned agent, or admin)
 - `PUT /{ticket_id}` — update ticket fields
 - `DELETE /{ticket_id}` — delete a ticket (owner or admin)
+- `POST /{ticket_id}/reanalyze` — re-run Gemini classification on the current title/description
 - `PATCH /{ticket_id}/assign` — assign ticket to an agent (admin only)
 
 Full interactive docs are auto-generated by FastAPI at [`/docs`](http://localhost:8000/docs).
@@ -114,11 +123,17 @@ backend/
     utils/auth.py        # token creation helpers
 ```
 
+## Design notes
+
+- **AI is derived state.** `priority`, `tags`, and `suggested_reply` are always overwritten by the model on create — clients can't self-prioritize. The `/reanalyze` endpoint exists because edits to title/description can invalidate the original classification.
+- **Graceful AI degradation.** A Gemini outage or quota exhaustion drops the ticket into a safe-defaults state instead of failing the request. Operators can re-run classification later.
+- **Server-side pagination and filtering.** List endpoints return only a page of results with a separate total count, so the API stays cheap as the dataset grows.
+- **Request schema ≠ storage schema.** The Pydantic input model leaves AI-managed fields optional because the server fills them; the stored document is always complete.
+
 ## Roadmap
 
-- [ ] Wire `analyze_ticket` into the ticket-create route
-- [ ] Manual re-analyze endpoint for edited tickets
+- [ ] Move AI call to a FastAPI `BackgroundTasks` job so ticket creation returns instantly
 - [ ] Vector embeddings + Qdrant for "find similar past tickets"
 - [ ] Email notifications on assignment / status change
 - [ ] React frontend (currently scaffold only)
-- [ ] Unit + integration tests
+- [ ] Unit + integration tests (mock Gemini, ephemeral Mongo)
