@@ -1,30 +1,31 @@
 from fastapi import APIRouter, HTTPException, Depends
 from app.models.user import UserCreated, UserResponse, UserLogin
-from app.database import users_collections
+from app.database import users_collection
 from app.services.auth_service import hashPassword, verifyPassword
 from bson import ObjectId
+from bson.errors import InvalidId
 from app.utils.auth import create_access_token
 from app.dependencies.auth import get_current_user
-from datetime import datetime
+from datetime import datetime, timezone
 
 router = APIRouter()
 
 #registering the user
 @router.post("/register")
 def register(user:UserCreated):
-    existingUser = users_collections.find_one({"email":user.email})
+    existingUser = users_collection.find_one({"email":user.email})
     if existingUser:
-        raise HTTPException(status_code=400, detail={"User already registered"})
+        raise HTTPException(status_code=400, detail="User already registered")
     hashedPw = hashPassword(user.password)
     user_data = {
         "name":user.name,
         "email":user.email,
         "hashedPassword":hashedPw,
         "role":user.role,
-        "created_at":datetime.utcnow()
+        "created_at":datetime.now(timezone.utc)
     }
 
-    users_collections.insert_one(user_data)
+    users_collection.insert_one(user_data)
     return {"message":"User created"}
 
 #all the users
@@ -32,25 +33,31 @@ def register(user:UserCreated):
 def allUserProfile(current_user=Depends(get_current_user)):
     if current_user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Access Denied")
-    users = list(users_collections.find())
+    users = list(users_collection.find())
     for user in users:
         user["_id"] = str(user["_id"])
-        user.pop("hasshedPassword", None)
+        user.pop("hashedPassword", None)
     return users
 
 #to get one user
 @router.get("/profile/{user_id}", response_model=UserResponse)
-def getUserProfile(user_id:str):
-    user = users_collections.find_one({"_id":ObjectId(user_id)})
+def getUserProfile(user_id:str, current_user=Depends(get_current_user)):
+    try:
+        obj_id = ObjectId(user_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Bad Request")
+    user = users_collection.find_one({"_id":obj_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    if current_user["role"] != "admin" and str(user["_id"]) != current_user["user_id"]:
+        raise HTTPException(status_code=403, detail="Unauthorised")
     user["_id"] = str(user["_id"])
     return user
 
 #to login the user
 @router.post("/login")
 def loginUser(user:UserLogin):
-    db_user = users_collections.find_one({"email":user.email})
+    db_user = users_collection.find_one({"email":user.email})
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
     
@@ -63,4 +70,41 @@ def loginUser(user:UserLogin):
         "role":str(db_user["role"])
     })
     
-    return {"access_token":token}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": str(db_user["_id"]),
+            "name": db_user["name"],
+            "email": db_user["email"],
+            "role": db_user["role"]
+        }
+    }
+
+#current user
+@router.get("/me", response_model=UserResponse)
+def currentUser(current_user = Depends(get_current_user)):
+    try:
+        obj_id = ObjectId(current_user["user_id"])
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    
+    user = users_collection.find_one({"_id":obj_id})
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user["_id"] = str(user["_id"])
+    user.pop("hashedPassword", None)
+    return user
+
+#get all the agents
+@router.get("/agents")
+def getAllAgents(current_user = Depends(get_current_user)):
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Access Denied")
+    users = list(users_collection.find({"role"=="agents"}))
+    for user in users:
+        user["_id"] = str(user["_id"])
+        user.pop("hashedPassword", None)
+    return users
