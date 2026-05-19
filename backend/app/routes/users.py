@@ -103,7 +103,7 @@ def currentUser(current_user = Depends(get_current_user)):
 def getAllAgents(current_user = Depends(get_current_user)):
     if current_user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Access Denied")
-    users = list(users_collection.find({"role"=="agents"}))
+    users = list(users_collection.find({"role": "agent"}))
     for user in users:
         user["_id"] = str(user["_id"])
         user.pop("hashedPassword", None)
